@@ -1,18 +1,27 @@
 package edu.gmu.cs475;
 
 import edu.gmu.cs475.internal.IKVStore;
+import org.apache.curator.CuratorZookeeperClient;
 import org.apache.curator.framework.CuratorFramework;
 import org.apache.curator.framework.recipes.leader.LeaderLatch;
+import org.apache.curator.framework.recipes.leader.Participant;
+import org.apache.curator.framework.recipes.nodes.PersistentNode;
 import org.apache.curator.framework.state.ConnectionState;
+import org.apache.zookeeper.CreateMode;
 
 import java.io.IOException;
 import java.rmi.RemoteException;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
+
+
+
 
 public class KVStore extends AbstractKVStore {
-
-
+	ConcurrentHashMap<String, ReentrantReadWriteLock> lockMap = new ConcurrentHashMap<>();
 	private LeaderLatch leaderLatch;
-//	private IKVStore leaderKVStoreConnection;
 	/**
 	 * This callback is invoked once your client has started up and published an RMI endpoint.
 	 * <p>
@@ -26,12 +35,21 @@ public class KVStore extends AbstractKVStore {
 	 */
 	@Override
 	public void initClient(String localClientHostname, int localClientPort) {
+		// create a node
+		PersistentNode node = new PersistentNode(zk, CreateMode.EPHEMERAL, false, ZK_MEMBERSHIP_NODE + "/" + getLocalConnectString(), new byte[0]);
+		node.start();
 
-//		try {
-//			leaderKVStoreConnection = connectToKVStore(leaderLatch.getLeader().getId());
-//		} catch (Exception e) {
-//			e.printStackTrace();
-//		}
+		// set leader
+		if(leaderLatch == null){
+			leaderLatch = new LeaderLatch(zk, ZK_LEADER_NODE, getLocalConnectString());
+			try {
+				leaderLatch.start();
+			} catch (Exception e) {
+				e.printStackTrace();
+			}
+		}
+
+		// add listeners
 	}
 
 	/**
@@ -43,9 +61,32 @@ public class KVStore extends AbstractKVStore {
 	 */
 	@Override
 	public String getValue(String key) throws IOException {
-		IKVStore leaderKVStoreConnection = connectToKVStore(leaderLatch.getLeader().getId());
-		return null;
+	ReentrantReadWriteLock lock = getLock(key);
+	lock.readLock().lock();
+		try{
+			String value = null;
+			try {
+				String id = leaderLatch.getLeader().getId();
+				IKVStore store = connectToKVStore(id);
+				value = store.getValue(key, getLocalConnectString());
+			} catch (Exception e) {
+				e.printStackTrace();
+			}
+			return value;
+		}finally {
+			lock.readLock().unlock();
+		}
 	}
+
+	public ReentrantReadWriteLock getLock(String key){
+		ReentrantReadWriteLock lock = lockMap.get(key);
+		if(lock == null){
+			lock = new ReentrantReadWriteLock();
+			lockMap.put(key, lock);
+		}
+		return lock;
+	}
+
 
 	/**
 	 * Update the value of a key. After updating the value, this new value will be locally cached.
@@ -56,7 +97,18 @@ public class KVStore extends AbstractKVStore {
 	 */
 	@Override
 	public void setValue(String key, String value) throws IOException {
-
+	ReentrantReadWriteLock lock = getLock(key);
+	lock.writeLock().lock();
+		try{
+			try {
+				IKVStore leaderKVStoreConnection = connectToKVStore(leaderLatch.getLeader().getId());
+				leaderKVStoreConnection.setValue(key, value, getLocalConnectString());
+			} catch (Exception e) {
+				e.printStackTrace();
+			}
+		}finally {
+		lock.writeLock().unlock();
+		}
 	}
 
 	/**
@@ -72,7 +124,21 @@ public class KVStore extends AbstractKVStore {
 	 */
 	@Override
 	public String getValue(String key, String fromID) throws RemoteException {
-		return null;
+		ReentrantReadWriteLock lock = getLock(key);
+		lock.readLock().lock();
+		try{
+			String value = null;
+			try {
+				String id = leaderLatch.getLeader().getId();
+				IKVStore store = connectToKVStore(id);
+				value = store.getValue(key, fromID);
+			} catch (Exception e) {
+				e.printStackTrace();
+			}
+			return value;
+		}finally {
+			lock.readLock().unlock();
+		}
 	}
 
 	/**
@@ -88,7 +154,18 @@ public class KVStore extends AbstractKVStore {
 	 */
 	@Override
 	public void setValue(String key, String value, String fromID) throws IOException {
-
+		ReentrantReadWriteLock lock = getLock(key);
+		lock.writeLock().lock();
+		try{
+			try {
+				IKVStore leaderKVStoreConnection = connectToKVStore(leaderLatch.getLeader().getId());
+				leaderKVStoreConnection.setValue(key, value, fromID);
+			} catch (Exception e) {
+				e.printStackTrace();
+			}
+		}finally {
+			lock.writeLock().unlock();
+		}
 	}
 
 	/**
