@@ -1,27 +1,23 @@
 package edu.gmu.cs475;
 
 import edu.gmu.cs475.internal.IKVStore;
-import org.apache.curator.CuratorZookeeperClient;
 import org.apache.curator.framework.CuratorFramework;
 import org.apache.curator.framework.recipes.leader.LeaderLatch;
-import org.apache.curator.framework.recipes.leader.Participant;
 import org.apache.curator.framework.recipes.nodes.PersistentNode;
 import org.apache.curator.framework.state.ConnectionState;
 import org.apache.zookeeper.CreateMode;
 
 import java.io.IOException;
 import java.rmi.RemoteException;
-import java.util.Collection;
-import java.util.HashMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
-
-
 
 
 public class KVStore extends AbstractKVStore {
 	ConcurrentHashMap<String, ReentrantReadWriteLock> lockMap = new ConcurrentHashMap<>();
 	private LeaderLatch leaderLatch;
+	private IKVStore leaderStore;
+
 	/**
 	 * This callback is invoked once your client has started up and published an RMI endpoint.
 	 * <p>
@@ -44,6 +40,8 @@ public class KVStore extends AbstractKVStore {
 			leaderLatch = new LeaderLatch(zk, ZK_LEADER_NODE, getLocalConnectString());
 			try {
 				leaderLatch.start();
+				leaderLatch.await();
+				leaderStore = connectToKVStore(leaderLatch.getLeader().getId());
 			} catch (Exception e) {
 				e.printStackTrace();
 			}
@@ -66,9 +64,7 @@ public class KVStore extends AbstractKVStore {
 		try{
 			String value = null;
 			try {
-				String id = leaderLatch.getLeader().getId();
-				IKVStore store = connectToKVStore(id);
-				value = store.getValue(key, getLocalConnectString());
+				value = leaderStore.getValue(key, getLocalConnectString());
 			} catch (Exception e) {
 				e.printStackTrace();
 			}
@@ -78,7 +74,7 @@ public class KVStore extends AbstractKVStore {
 		}
 	}
 
-	public ReentrantReadWriteLock getLock(String key){
+	public synchronized ReentrantReadWriteLock getLock(String key){
 		ReentrantReadWriteLock lock = lockMap.get(key);
 		if(lock == null){
 			lock = new ReentrantReadWriteLock();
@@ -101,8 +97,7 @@ public class KVStore extends AbstractKVStore {
 	lock.writeLock().lock();
 		try{
 			try {
-				IKVStore leaderKVStoreConnection = connectToKVStore(leaderLatch.getLeader().getId());
-				leaderKVStoreConnection.setValue(key, value, getLocalConnectString());
+				leaderStore.setValue(key, value, getLocalConnectString());
 			} catch (Exception e) {
 				e.printStackTrace();
 			}
@@ -129,9 +124,7 @@ public class KVStore extends AbstractKVStore {
 		try{
 			String value = null;
 			try {
-				String id = leaderLatch.getLeader().getId();
-				IKVStore store = connectToKVStore(id);
-				value = store.getValue(key, fromID);
+				value = leaderStore.getValue(key, fromID);
 			} catch (Exception e) {
 				e.printStackTrace();
 			}
@@ -158,8 +151,7 @@ public class KVStore extends AbstractKVStore {
 		lock.writeLock().lock();
 		try{
 			try {
-				IKVStore leaderKVStoreConnection = connectToKVStore(leaderLatch.getLeader().getId());
-				leaderKVStoreConnection.setValue(key, value, fromID);
+				leaderStore.setValue(key, value, fromID);
 			} catch (Exception e) {
 				e.printStackTrace();
 			}
