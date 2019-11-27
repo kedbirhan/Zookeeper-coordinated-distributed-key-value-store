@@ -46,8 +46,6 @@ public class KVStore extends AbstractKVStore {
             leaderLatch = new LeaderLatch(zk, ZK_LEADER_NODE, getLocalConnectString());
             try {
                 leaderLatch.start();
-                leaderLatch.await();
-                //leaderStore = connectToKVStore(leaderLatch.getLeader().getId());
             } catch (Exception e) {
                 e.printStackTrace();
             }
