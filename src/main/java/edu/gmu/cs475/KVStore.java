@@ -2,6 +2,7 @@ package edu.gmu.cs475;
 
 import edu.gmu.cs475.internal.IKVStore;
 import org.apache.curator.framework.CuratorFramework;
+import org.apache.curator.framework.recipes.cache.TreeCache;
 import org.apache.curator.framework.recipes.leader.LeaderLatch;
 import org.apache.curator.framework.recipes.nodes.PersistentNode;
 import org.apache.curator.framework.state.ConnectionState;
@@ -19,6 +20,8 @@ public class KVStore extends AbstractKVStore {
     private LeaderLatch leaderLatch;
 
     private HashMap<String, HashMap<String, String>> cacheMap = new HashMap<>();
+    HashMap<String, PersistentNode> groups= new HashMap<>(); // used to track the clients we have connected to the the zookeper
+    HashMap<String,TreeCache> treeCacheMap= new HashMap<>(); // caches
 
     /**
      * This callback is invoked once your client has started up and published an RMI endpoint.
@@ -36,10 +39,23 @@ public class KVStore extends AbstractKVStore {
         // create a node
         PersistentNode node = new PersistentNode(zk, CreateMode.EPHEMERAL, false, ZK_MEMBERSHIP_NODE + "/" + getLocalConnectString(), new byte[0]);
         node.start();
+                groups.put(ZK_MEMBERSHIP_NODE, node); // lets save the node so we c
+        // create a cache for this client <-- this is wrong the professor used TreeCache in the example
+//        HashMap<String, String> cache = new HashMap<>();
+//        cacheMap.put(getLocalConnectString(), cache);
 
-        // create a cache for this client
-        HashMap<String, String> cache = new HashMap<>();
-        cacheMap.put(getLocalConnectString(), cache);
+        TreeCache cache=new TreeCache(zk,ZK_MEMBERSHIP_NODE);
+        cache.getListenable().addListener((client,event) -> {
+            System.out.println("cleint  " + getLocalConnectString() + "  membership change detected - "+ event );
+
+            });
+        try {
+            cache.start();
+            treeCacheMap.put(ZK_MEMBERSHIP_NODE,cache);
+        }catch (Exception e ){
+            e.printStackTrace();
+        }
+
 
         // set leader
         if (leaderLatch == null) {
