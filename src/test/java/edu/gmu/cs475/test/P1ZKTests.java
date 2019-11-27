@@ -31,6 +31,5 @@ public class P1ZKTests extends Base475Test {
 		Thread.sleep(10000);
 		TestingClient second = newClient("Follower");
 		Assert.assertTrue("Expected the second client we started to assume leadership", blockUntilLeader(second));
-
 	}
 }

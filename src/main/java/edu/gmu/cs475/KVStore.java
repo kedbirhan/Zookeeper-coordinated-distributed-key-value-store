@@ -2,7 +2,6 @@ package edu.gmu.cs475;
 
 import edu.gmu.cs475.internal.IKVStore;
 import org.apache.curator.framework.CuratorFramework;
-import org.apache.curator.framework.recipes.cache.TreeCache;
 import org.apache.curator.framework.recipes.leader.LeaderLatch;
 import org.apache.curator.framework.recipes.nodes.PersistentNode;
 import org.apache.curator.framework.state.ConnectionState;
@@ -11,17 +10,17 @@ import org.apache.zookeeper.CreateMode;
 import java.io.IOException;
 import java.rmi.RemoteException;
 import java.util.HashMap;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.LinkedList;
+import java.util.List;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 
 public class KVStore extends AbstractKVStore {
-    ConcurrentHashMap<String, ReentrantReadWriteLock> lockMap = new ConcurrentHashMap<>();
     private LeaderLatch leaderLatch;
 
-    private HashMap<String, HashMap<String, String>> cacheMap = new HashMap<>();
-    HashMap<String, PersistentNode> groups= new HashMap<>(); // used to track the clients we have connected to the the zookeper
-    HashMap<String,TreeCache> treeCacheMap= new HashMap<>(); // caches
+    private HashMap<String, String> cache = new HashMap<>();
+    private HashMap<String, ReentrantReadWriteLock> locks = new HashMap<>();
+    private HashMap<String, List<String>> invalidateMap = new HashMap<>();
 
     /**
      * This callback is invoked once your client has started up and published an RMI endpoint.
@@ -36,38 +35,22 @@ public class KVStore extends AbstractKVStore {
      */
     @Override
     public void initClient(String localClientHostname, int localClientPort) {
-        // create a node
-        PersistentNode node = new PersistentNode(zk, CreateMode.EPHEMERAL, false, ZK_MEMBERSHIP_NODE + "/" + getLocalConnectString(), new byte[0]);
-        node.start();
-                groups.put(ZK_MEMBERSHIP_NODE, node); // lets save the node so we c
-        // create a cache for this client <-- this is wrong the professor used TreeCache in the example
-//        HashMap<String, String> cache = new HashMap<>();
-//        cacheMap.put(getLocalConnectString(), cache);
+		// create a node
+		PersistentNode node = new PersistentNode(zk, CreateMode.EPHEMERAL, false, ZK_MEMBERSHIP_NODE + "/" + getLocalConnectString(), new byte[0]);
+		node.start();
 
-        TreeCache cache=new TreeCache(zk,ZK_MEMBERSHIP_NODE);
-        cache.getListenable().addListener((client,event) -> {
-            System.out.println("cleint  " + getLocalConnectString() + "  membership change detected - "+ event );
-
-            });
-        try {
-            cache.start();
-            treeCacheMap.put(ZK_MEMBERSHIP_NODE,cache);
-        }catch (Exception e ){
-            e.printStackTrace();
-        }
-
-
-        // set leader
-        if (leaderLatch == null) {
-            leaderLatch = new LeaderLatch(zk, ZK_LEADER_NODE, getLocalConnectString());
-            try {
-                leaderLatch.start();
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
-        }
-
-        // add listeners
+		// If there is no leader, select one
+		leaderLatch = new LeaderLatch(zk, ZK_LEADER_NODE, getLocalConnectString());
+		try {
+			String leaderId = null;
+			leaderId = leaderLatch.getLeader().getId();
+			// check if there is a leader
+			if(leaderId == null || leaderId.isEmpty()){
+				leaderLatch.start();
+			}
+		}catch (Exception e){
+			e.printStackTrace();
+		}
     }
 
     /**
@@ -79,35 +62,39 @@ public class KVStore extends AbstractKVStore {
      */
     @Override
     public String getValue(String key) throws IOException {
-        ReentrantReadWriteLock lock = getLock(key);
-        lock.readLock().lock();
+    	ReentrantReadWriteLock lock = getLock(key);
+		lock.readLock().lock();
+
         String value = null;
         try {
             // look if client has the value cached
-            HashMap<String, String> cache = cacheMap.get(getLocalConnectString());
-            value = cache.get(key);
+           value = cache.get(key);
 
             // value is not in cache, ask leader
             if (value == null) {
-                IKVStore leaderStore = connectToKVStore(getLocalConnectString());
+                IKVStore leaderStore = connectToKVStore(leaderLatch.getLeader().getId());
                 value = leaderStore.getValue(key, getLocalConnectString());
+                // update followers cache if value is not null
+                if(value != null){
+                	cache.put(key, value);
+				}
             }
         } catch (Exception e) {
             e.printStackTrace();
         } finally {
-            lock.readLock().unlock();
-        }
-		return value;
+			lock.readLock().unlock();
+		}
+        return value;
     }
 
-    public synchronized ReentrantReadWriteLock getLock(String key) {
-        ReentrantReadWriteLock lock = lockMap.get(key);
-        if (lock == null) {
-            lock = new ReentrantReadWriteLock();
-            lockMap.put(key, lock);
-        }
-        return lock;
-    }
+    public synchronized ReentrantReadWriteLock getLock(String key){
+		ReentrantReadWriteLock lock = locks.get(key);
+		if(lock == null){
+			lock = new ReentrantReadWriteLock();
+			locks.put(key, lock);
+		}
+		return lock;
+	}
 
 
     /**
@@ -119,16 +106,17 @@ public class KVStore extends AbstractKVStore {
      */
     @Override
     public void setValue(String key, String value) throws IOException {
-        ReentrantReadWriteLock lock = getLock(key);
-        lock.writeLock().lock();
+		ReentrantReadWriteLock lock = getLock(key);
+		lock.writeLock().lock();
+
         try {
-            try {
-				IKVStore leaderStore = connectToKVStore(getLocalConnectString());
-				leaderStore.setValue(key, value, getLocalConnectString());
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
-        } finally {
+        	IKVStore leaderStore = connectToKVStore(leaderLatch.getLeader().getId());
+        	leaderStore.setValue(key, value, getLocalConnectString());
+        	cache.put(key, value);
+		}catch (Exception e){
+        	throw new IOException();
+		}
+        finally {
             lock.writeLock().unlock();
         }
     }
@@ -146,15 +134,37 @@ public class KVStore extends AbstractKVStore {
      */
     @Override
     public String getValue(String key, String fromID) throws RemoteException {
-        String value = null;
-        try {
-            HashMap<String, String> cache = cacheMap.get(leaderLatch.getLeader().getId());
-            value = cache.get(key);
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-        return value;
+		ReentrantReadWriteLock lock = getLock(key);
+		lock.readLock().lock();
+		try{
+			String value = cache.get(key);
+			if(value != null){
+				saveToInvalidateMap(key, fromID);
+			}
+			return value;
+		}finally {
+			lock.readLock().unlock();
+		}
     }
+
+    private synchronized void saveToInvalidateMap(String key, String fromID){
+		try {
+			if(fromID.equals(leaderLatch.getLeader().getId())){
+				return;
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+
+		List<String> list = invalidateMap.get(key);
+		if(list == null){
+			list = new LinkedList<>();
+			invalidateMap.put(key, list);
+		}
+		if(!list.contains(fromID)){
+			list.add(fromID);
+		}
+	}
 
     /**
      * Request that the value of a key is updated. The node requesting this update is expected to cache it for subsequent reads.
@@ -169,11 +179,32 @@ public class KVStore extends AbstractKVStore {
      */
     @Override
     public void setValue(String key, String value, String fromID) throws IOException {
-		try {
-			HashMap<String, String> cache = cacheMap.get(leaderLatch.getLeader().getId());
+		ReentrantReadWriteLock lock = getLock(key);
+		lock.writeLock().lock();
+
+		try{
+			// invalidate the cache of all clients
+			List<String> list = invalidateMap.get(key);
+			if(list != null){
+				for(String id : list){
+					IKVStore client = connectToKVStore(id);
+					client.invalidateKey(key);
+				}
+				// empty the list
+				list.clear();
+			}
+
+
+			//update the value
 			cache.put(key, value);
+
+			//save follower who has this key cached
+			saveToInvalidateMap(key, fromID);
+
 		} catch (Exception e) {
 			e.printStackTrace();
+		} finally {
+			lock.writeLock().unlock();
 		}
     }
 
@@ -188,8 +219,8 @@ public class KVStore extends AbstractKVStore {
      */
     @Override
     public void invalidateKey(String key) throws RemoteException {
-
-    }
+		cache.remove(key);
+	}
 
     /**
      * Called when ZooKeeper detects that your connection status changes
