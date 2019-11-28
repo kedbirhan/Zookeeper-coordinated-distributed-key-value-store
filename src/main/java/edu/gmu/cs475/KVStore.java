@@ -17,6 +17,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 public class KVStore extends AbstractKVStore {
     private LeaderLatch leaderLatch;
+    private boolean isLeader = false;
 
     private HashMap<String, String> cache = new HashMap<>();
     private HashMap<String, ReentrantReadWriteLock> locks = new HashMap<>();
@@ -47,6 +48,7 @@ public class KVStore extends AbstractKVStore {
 			// check if there is a leader
 			if(leaderId == null || leaderId.isEmpty()){
 				leaderLatch.start();
+				isLeader = true;
 			}
 		}catch (Exception e){
 			e.printStackTrace();
@@ -69,6 +71,10 @@ public class KVStore extends AbstractKVStore {
         try {
             // look if client has the value cached
            value = cache.get(key);
+
+			if(isLeader){
+				return value;
+			}
 
             // value is not in cache, ask leader
             if (value == null) {
@@ -110,6 +116,11 @@ public class KVStore extends AbstractKVStore {
 		lock.writeLock().lock();
 
         try {
+        	if(isLeader){
+        		cache.put(key, value);
+        		return;
+			}
+
         	IKVStore leaderStore = connectToKVStore(leaderLatch.getLeader().getId());
         	leaderStore.setValue(key, value, getLocalConnectString());
         	cache.put(key, value);
