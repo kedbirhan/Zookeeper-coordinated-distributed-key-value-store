@@ -238,24 +238,35 @@ public class KVStore extends AbstractKVStore {
 
 		ReentrantReadWriteLock lock = getLock(key);
 		lock.writeLock().lock();
-
+        String savedId = null;
 		try{
 			// invalidate the cache of all clients
 			List<String> list = invalidateMap.get(key);
 			if(list != null){
+                System.out.println(list);
+
 				for(String id : list){
-					try{
+				    savedId = id;
+                    System.out.println("invalidating key for " + id);
 
-						if(!zk.getChildren().forPath(ZK_MEMBERSHIP_NODE).contains(id)){
-							list.remove(id);
-							continue;
-						}
+                    try {
+                        if(!zk.getChildren().forPath(ZK_MEMBERSHIP_NODE).contains(id)){
+                            System.out.println("Skipping invalidate for " + id + " no zk session");
+                            list.remove(id);
+                            continue;
+                        }
+                    } catch (Exception e) {
+                        System.out.println("Couldn't get zk children.");
+                        return;
+                    }
 
-						System.out.println("invalidating key for " + id);
+                    try{
+
 						IKVStore client = connectToKVStore(id);
 						client.invalidateKey(key);
 					}catch(Exception e){
-						e.printStackTrace();
+                        System.out.println("Couldn't connect to " + savedId);
+						//e.printStackTrace();
 					}
 				}
 				// empty the list
@@ -307,6 +318,13 @@ public class KVStore extends AbstractKVStore {
 				e.printStackTrace();
 			}
 		}
+
+        // follower disconnected
+		if(leaderLatch != null && !leaderLatch.hasLeadership() && !state.isConnected()){
+            cache = new HashMap<>();
+            locks = new HashMap<>();
+        }
+
     }
 
     /**

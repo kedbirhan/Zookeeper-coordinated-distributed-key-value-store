@@ -39,19 +39,26 @@ public class P1ZKTests extends Base475Test {
 		blockUntilLeader(leader);
 		TestingClient follower1 = newClient("follower1");
 		TestingClient follower2 = newClient("follower2");
+		TestingClient follower3 = newClient("follower3");
 		blockUntilMemberJoins(follower1);
 		blockUntilMemberJoins(follower2);
+		blockUntilMemberJoins(follower3);
 
 		try {
 			follower1.setValue("a", "1");
 			follower2.getValue("a");
+			follower3.getValue("a");
 		} catch (IOException e) {
 			e.printStackTrace();
 		}
 
 		follower2.suspendAccessToZK();
-		Thread.sleep(20000);
+		Thread.sleep(15000);
 
 		follower1.setValue("a", "2");
+		follower2.resumeAccessToZK();
+
+		Assert.assertEquals("2", follower2.get("a"));
+		Assert.assertEquals("2", follower3.get("a"));
 	}
 }
