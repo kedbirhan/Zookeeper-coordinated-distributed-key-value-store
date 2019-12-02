@@ -20,6 +20,7 @@ public class KVStore extends AbstractKVStore {
     private HashMap<String, String> cache = new HashMap<>();
     private HashMap<String, ReentrantReadWriteLock> locks = new HashMap<>();
     private HashMap<String, List<String>> invalidateMap = new HashMap<>();
+    private ConnectionState state;
 
     /**
      * This callback is invoked once your client has started up and published an RMI endpoint.
@@ -115,11 +116,13 @@ public class KVStore extends AbstractKVStore {
 
         try {
 
+        	// check if this instance is the leader
         	if(leaderLatch.hasLeadership()){
-        		cache.put(key, value);
-        		return;
+				setValue(key, value, getLocalConnectString());
+				return;
 			}
 
+        	// if this is a follower, connect to the leader
         	IKVStore leaderStore = connectToKVStore(leaderLatch.getLeader().getId());
         	leaderStore.setValue(key, value, getLocalConnectString());
         	cache.put(key, value);
@@ -158,14 +161,6 @@ public class KVStore extends AbstractKVStore {
     }
 
     private synchronized void saveToInvalidateMap(String key, String fromID){
-		try {
-			if(fromID.equals(leaderLatch.getLeader().getId())){
-				return;
-			}
-		} catch (Exception e) {
-			e.printStackTrace();
-		}
-
 		List<String> list = invalidateMap.get(key);
 		if(list == null){
 			list = new LinkedList<>();
@@ -197,13 +192,13 @@ public class KVStore extends AbstractKVStore {
 			List<String> list = invalidateMap.get(key);
 			if(list != null){
 				for(String id : list){
+					System.out.println("invalidating key for " + id);
 					IKVStore client = connectToKVStore(id);
 					client.invalidateKey(key);
 				}
 				// empty the list
 				list.clear();
 			}
-
 
 			//update the value
 			cache.put(key, value);
@@ -240,7 +235,8 @@ public class KVStore extends AbstractKVStore {
      */
     @Override
     public void stateChanged(CuratorFramework curatorFramework, ConnectionState connectionState) {
-        System.out.println(getLocalConnectString() + " " + connectionState);
+        state = connectionState;
+
     }
 
     /**
