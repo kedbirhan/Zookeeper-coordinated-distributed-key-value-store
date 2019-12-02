@@ -8,6 +8,8 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.Timeout;
 
+import java.io.IOException;
+
 public class P1ZKTests extends Base475Test {
 
 	@Rule
@@ -23,10 +25,8 @@ public class P1ZKTests extends Base475Test {
 
 	@Test
 	public void testFirstClientBecomesLeader() throws Exception {
-
 		TestingClient firstClient = newClient("Leader");
 		Assert.assertTrue("Expected the first client we started to assume leadership", blockUntilLeader(firstClient));
-
 		firstClient.suspendAccessToZK();
 		Thread.sleep(10000);
 		TestingClient second = newClient("Follower");
@@ -34,63 +34,24 @@ public class P1ZKTests extends Base475Test {
 	}
 
 	@Test
-	public void testF() throws Exception {
+	public void test() throws  Exception{
+		TestingClient leader = newClient("leader");
+		blockUntilLeader(leader);
+		TestingClient follower1 = newClient("follower1");
+		TestingClient follower2 = newClient("follower2");
+		blockUntilMemberJoins(follower1);
+		blockUntilMemberJoins(follower2);
 
-		TestingClient firstClient = newClient("Leader");
-		Assert.assertTrue("Expected the first client we started to assume leadership", blockUntilLeader(firstClient));
-		TestingClient second = newClient("Follower");
-		TestingClient a = newClient("Follower");
-		TestingClient b = newClient("Follower");
-		TestingClient c = newClient("Follower");
+		try {
+			follower1.setValue("a", "1");
+			follower2.getValue("a");
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
 
-		blockUntilMemberJoins(second);
-		blockUntilMemberJoins(a);
-		blockUntilMemberJoins(b);
-		blockUntilMemberJoins(c);
+		follower2.suspendAccessToZK();
+		Thread.sleep(20000);
 
-		firstClient.suspendAccessToZK();
-		Thread.sleep(10000);
-
-		Thread t1 = new Thread(() -> {
-			try {
-				second.getValue("a");
-			} catch (Throwable ex) {
-				ex.printStackTrace();
-			}
-		});
-		Thread t2 = new Thread(() -> {
-			try {
-				a.getValue("a");
-			} catch (Throwable ex) {
-				ex.printStackTrace();
-			}
-		});
-
-		Thread t3 = new Thread(() -> {
-			try {
-				b.getValue("a");
-			} catch (Throwable ex) {
-				ex.printStackTrace();
-			}
-		});
-
-		Thread t4 = new Thread(() -> {
-			try {
-				c.getValue("a");
-			} catch (Throwable ex) {
-				ex.printStackTrace();
-			}
-		});
-
-		t1.start();
-		t2.start();
-		t3.start();
-		t4.start();
-		t1.join();
-		t2.join();
-		t3.join();
-		t4.join();
-
-		Assert.assertTrue("Expected the second client we started to assume leadership", blockUntilLeader(second));
+		follower1.setValue("a", "2");
 	}
 }

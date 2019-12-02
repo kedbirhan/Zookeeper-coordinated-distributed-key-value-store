@@ -3,6 +3,7 @@ package edu.gmu.cs475;
 import edu.gmu.cs475.internal.IKVStore;
 import org.apache.curator.framework.CuratorFramework;
 import org.apache.curator.framework.recipes.leader.LeaderLatch;
+import org.apache.curator.framework.recipes.leader.Participant;
 import org.apache.curator.framework.recipes.nodes.PersistentNode;
 import org.apache.curator.framework.state.ConnectionState;
 import org.apache.curator.framework.state.ConnectionStateListener;
@@ -75,12 +76,8 @@ public class KVStore extends AbstractKVStore {
         	// attempt to get the value
 			value = get(key);
 		}catch(Exception e){
-        	// cannot contact the leader, participate in leader election
-			try {
-				leaderLatch.start();
-			} catch (Exception ex) {
-				ex.printStackTrace();
-			}
+        	//leader is disconnect, select a new leader
+			selectLeader();
 
 			try {
 				value = get(key);
@@ -135,28 +132,55 @@ public class KVStore extends AbstractKVStore {
      */
     @Override
     public void setValue(String key, String value) throws IOException {
+		if(!state.isConnected()){
+			throw new IOException();
+		}
+
 		ReentrantReadWriteLock lock = getLock(key);
 		lock.writeLock().lock();
 
         try {
-
-        	// check if this instance is the leader
-        	if(leaderLatch.hasLeadership()){
-				setValue(key, value, getLocalConnectString());
-				return;
+        	// try to set the value
+			set(key, value);
+		}catch (Exception e){ // couldn't contact the leader
+        	// select the leader
+        	selectLeader();
+        	// try to set the value again
+			try {
+				set(key, value);
+			} catch (Exception ex) {
+				System.out.println("COULDN'T CONTACT THE LEADER AGAIN");
+				ex.printStackTrace();
 			}
-
-        	// if this is a follower, connect to the leader
-        	IKVStore leaderStore = connectToKVStore(leaderLatch.getLeader().getId());
-        	leaderStore.setValue(key, value, getLocalConnectString());
-        	cache.put(key, value);
-		}catch (Exception e){
-        	throw new IOException();
 		}
         finally {
             lock.writeLock().unlock();
         }
     }
+
+    public void set(String key, String value) throws Exception{
+		// check if this instance is the leader
+		if(leaderLatch.hasLeadership()){
+			setValue(key, value, getLocalConnectString());
+			return;
+		}
+
+		// if this is a follower, connect to the leader
+		IKVStore leaderStore = connectToKVStore(leaderLatch.getLeader().getId());
+		leaderStore.setValue(key, value, getLocalConnectString());
+		cache.put(key, value);
+	}
+
+    public void selectLeader(){
+		// cannot contact the leader, participate in leader election
+		try {
+			leaderLatch.start();
+			// block until leader gets elected
+			while(leaderLatch.getLeader().getId().isEmpty());
+		} catch (Exception ex) {
+			ex.printStackTrace();
+		}
+	}
 
     /**
      * Request the value of a key. The node requesting this value is expected to cache it for subsequent reads.
@@ -208,6 +232,10 @@ public class KVStore extends AbstractKVStore {
      */
     @Override
     public void setValue(String key, String value, String fromID) throws IOException {
+    	if(!state.isConnected()){
+    		throw new IOException();
+		}
+
 		ReentrantReadWriteLock lock = getLock(key);
 		lock.writeLock().lock();
 
@@ -216,9 +244,19 @@ public class KVStore extends AbstractKVStore {
 			List<String> list = invalidateMap.get(key);
 			if(list != null){
 				for(String id : list){
-					System.out.println("invalidating key for " + id);
-					IKVStore client = connectToKVStore(id);
-					client.invalidateKey(key);
+					try{
+
+						if(!zk.getChildren().forPath(ZK_MEMBERSHIP_NODE).contains(id)){
+							list.remove(id);
+							continue;
+						}
+
+						System.out.println("invalidating key for " + id);
+						IKVStore client = connectToKVStore(id);
+						client.invalidateKey(key);
+					}catch(Exception e){
+						e.printStackTrace();
+					}
 				}
 				// empty the list
 				list.clear();
@@ -230,8 +268,6 @@ public class KVStore extends AbstractKVStore {
 			//save follower who has this key cached
 			saveToInvalidateMap(key, fromID);
 
-		} catch (Exception e) {
-			e.printStackTrace();
 		} finally {
 			lock.writeLock().unlock();
 		}
