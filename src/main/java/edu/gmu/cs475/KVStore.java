@@ -5,6 +5,7 @@ import org.apache.curator.framework.CuratorFramework;
 import org.apache.curator.framework.recipes.leader.LeaderLatch;
 import org.apache.curator.framework.recipes.nodes.PersistentNode;
 import org.apache.curator.framework.state.ConnectionState;
+import org.apache.curator.framework.state.ConnectionStateListener;
 import org.apache.zookeeper.CreateMode;
 
 import java.io.IOException;
@@ -16,7 +17,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 
 public class KVStore extends AbstractKVStore {
-    private LeaderLatch leaderLatch;
+    LeaderLatch leaderLatch;
     private HashMap<String, String> cache = new HashMap<>();
     private HashMap<String, ReentrantReadWriteLock> locks = new HashMap<>();
     private HashMap<String, List<String>> invalidateMap = new HashMap<>();
@@ -62,35 +63,58 @@ public class KVStore extends AbstractKVStore {
      */
     @Override
     public String getValue(String key) throws IOException {
+    	if(!state.isConnected()){
+    		throw new IOException();
+		}
+
     	ReentrantReadWriteLock lock = getLock(key);
 		lock.readLock().lock();
 
         String value = null;
         try {
-            // look if client has the value cached
-           value = cache.get(key);
+        	// attempt to get the value
+			value = get(key);
+		}catch(Exception e){
+        	// cannot contact the leader, participate in leader election
+			try {
+				leaderLatch.start();
+			} catch (Exception ex) {
+				ex.printStackTrace();
+			}
 
-           // this is the leader
-           if(leaderLatch.hasLeadership()){
-           		return value;
-		   }
-
-            // value is not in cache, ask leader
-            if (value == null) {
-                IKVStore leaderStore = connectToKVStore(leaderLatch.getLeader().getId());
-                value = leaderStore.getValue(key, getLocalConnectString());
-                // update follower cache if value is not null
-                if(value != null){
-                	cache.put(key, value);
-				}
-            }
-        } catch (Exception e) {
-            e.printStackTrace();
-        } finally {
+			try {
+				value = get(key);
+			} catch (Exception ex) {
+				System.out.println("COULDN'T CONTACT THE LEADER AGAIN");
+				ex.printStackTrace();
+			}
+		} finally {
 			lock.readLock().unlock();
 		}
+
         return value;
     }
+
+    public String get(String key) throws Exception{
+		// look if client has the value cached
+		String value = cache.get(key);
+
+		// this is the leader
+		if (leaderLatch.hasLeadership()) {
+			return value;
+		}
+
+		// value is not in cache, ask leader
+		if (value == null) {
+			IKVStore leaderStore = connectToKVStore(leaderLatch.getLeader().getId());
+			value = leaderStore.getValue(key, getLocalConnectString());
+			// update follower cache if value is not null
+			if (value != null) {
+				cache.put(key, value);
+			}
+		}
+		return value;
+	}
 
     public synchronized ReentrantReadWriteLock getLock(String key){
 		ReentrantReadWriteLock lock = locks.get(key);
@@ -236,7 +260,17 @@ public class KVStore extends AbstractKVStore {
     @Override
     public void stateChanged(CuratorFramework curatorFramework, ConnectionState connectionState) {
         state = connectionState;
+		System.out.println("client: " + getLocalConnectString() + " " + state);
 
+		// if this is the leader
+		if(leaderLatch != null && leaderLatch.hasLeadership() && !state.isConnected()){
+			System.out.println("Leader " + getLocalConnectString() + " disconnected");
+			try {
+				leaderLatch.close();
+			} catch (IOException e) {
+				e.printStackTrace();
+			}
+		}
     }
 
     /**

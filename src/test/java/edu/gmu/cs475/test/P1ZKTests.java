@@ -32,4 +32,65 @@ public class P1ZKTests extends Base475Test {
 		TestingClient second = newClient("Follower");
 		Assert.assertTrue("Expected the second client we started to assume leadership", blockUntilLeader(second));
 	}
+
+	@Test
+	public void testF() throws Exception {
+
+		TestingClient firstClient = newClient("Leader");
+		Assert.assertTrue("Expected the first client we started to assume leadership", blockUntilLeader(firstClient));
+		TestingClient second = newClient("Follower");
+		TestingClient a = newClient("Follower");
+		TestingClient b = newClient("Follower");
+		TestingClient c = newClient("Follower");
+
+		blockUntilMemberJoins(second);
+		blockUntilMemberJoins(a);
+		blockUntilMemberJoins(b);
+		blockUntilMemberJoins(c);
+
+		firstClient.suspendAccessToZK();
+		Thread.sleep(10000);
+
+		Thread t1 = new Thread(() -> {
+			try {
+				second.getValue("a");
+			} catch (Throwable ex) {
+				ex.printStackTrace();
+			}
+		});
+		Thread t2 = new Thread(() -> {
+			try {
+				a.getValue("a");
+			} catch (Throwable ex) {
+				ex.printStackTrace();
+			}
+		});
+
+		Thread t3 = new Thread(() -> {
+			try {
+				b.getValue("a");
+			} catch (Throwable ex) {
+				ex.printStackTrace();
+			}
+		});
+
+		Thread t4 = new Thread(() -> {
+			try {
+				c.getValue("a");
+			} catch (Throwable ex) {
+				ex.printStackTrace();
+			}
+		});
+
+		t1.start();
+		t2.start();
+		t3.start();
+		t4.start();
+		t1.join();
+		t2.join();
+		t3.join();
+		t4.join();
+
+		Assert.assertTrue("Expected the second client we started to assume leadership", blockUntilLeader(second));
+	}
 }
