@@ -17,7 +17,6 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 public class KVStore extends AbstractKVStore {
     private LeaderLatch leaderLatch;
-
     private HashMap<String, String> cache = new HashMap<>();
     private HashMap<String, ReentrantReadWriteLock> locks = new HashMap<>();
     private HashMap<String, List<String>> invalidateMap = new HashMap<>();
