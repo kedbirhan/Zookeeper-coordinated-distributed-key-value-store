@@ -246,13 +246,15 @@ public class KVStore extends AbstractKVStore {
                 System.out.println(list);
 
 				for(String id : list){
-				    savedId = id;
-                    System.out.println("invalidating key for " + id);
-
-                    try {
-                        if(!zk.getChildren().forPath(ZK_MEMBERSHIP_NODE).contains(id)){
+					try {
+						zk.blockUntilConnected();
+					} catch (InterruptedException e) {
+						e.printStackTrace();
+					}
+					try {
+                        if(!(zk.getChildren().forPath(ZK_MEMBERSHIP_NODE).contains(id))){
                             System.out.println("Skipping invalidate for " + id + " no zk session");
-                            list.remove(id);
+							list.remove(id);
                             continue;
                         }
                     } catch (Exception e) {
@@ -261,7 +263,7 @@ public class KVStore extends AbstractKVStore {
                     }
 
                     try{
-
+						System.out.println("invalidating key for " + id);
 						IKVStore client = connectToKVStore(id);
 						client.invalidateKey(key);
 					}catch(Exception e){
