@@ -17,7 +17,6 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 public class KVStore extends AbstractKVStore {
     private LeaderLatch leaderLatch;
-    private boolean isLeader = false;
 
     private HashMap<String, String> cache = new HashMap<>();
     private HashMap<String, ReentrantReadWriteLock> locks = new HashMap<>();
@@ -43,12 +42,11 @@ public class KVStore extends AbstractKVStore {
 		// If there is no leader, select one
 		leaderLatch = new LeaderLatch(zk, ZK_LEADER_NODE, getLocalConnectString());
 		try {
-			String leaderId = null;
-			leaderId = leaderLatch.getLeader().getId();
+			String leaderId = leaderLatch.getLeader().getId();
 			// check if there is a leader
 			if(leaderId == null || leaderId.isEmpty()){
+				//select a leader
 				leaderLatch.start();
-				isLeader = true;
 			}
 		}catch (Exception e){
 			e.printStackTrace();
@@ -72,15 +70,16 @@ public class KVStore extends AbstractKVStore {
             // look if client has the value cached
            value = cache.get(key);
 
-			if(isLeader){
-				return value;
-			}
+           // this is the leader
+           if(leaderLatch.hasLeadership()){
+           		return value;
+		   }
 
             // value is not in cache, ask leader
             if (value == null) {
                 IKVStore leaderStore = connectToKVStore(leaderLatch.getLeader().getId());
                 value = leaderStore.getValue(key, getLocalConnectString());
-                // update followers cache if value is not null
+                // update follower cache if value is not null
                 if(value != null){
                 	cache.put(key, value);
 				}
@@ -116,7 +115,8 @@ public class KVStore extends AbstractKVStore {
 		lock.writeLock().lock();
 
         try {
-        	if(isLeader){
+
+        	if(leaderLatch.hasLeadership()){
         		cache.put(key, value);
         		return;
 			}
